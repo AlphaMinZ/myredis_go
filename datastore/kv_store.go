@@ -15,6 +15,8 @@ type KVStore struct {
 	mu        sync.Mutex
 	data      map[string]interface{}
 	expiredAt map[string]time.Time
+
+	expireTimeWheel *skiplist
 }
 
 func NewKVStore() database.DataStore {

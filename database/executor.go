@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/AlphaMinZ/myredis_go/handler"
 )
@@ -14,6 +15,8 @@ type DBExecutor struct {
 
 	cmdHandlers map[CmdType]CmdHandler
 	dataStore   DataStore
+
+	gcTicker *time.Ticker
 }
 
 func NewDBExecutor(dataStore DataStore) *DBExecutor {
@@ -23,6 +26,7 @@ func NewDBExecutor(dataStore DataStore) *DBExecutor {
 		ch:        make(chan *Command),
 		ctx:       ctx,
 		cancel:    cancel,
+		gcTicker:  time.NewTicker(time.Minute),
 	}
 	e.cmdHandlers = map[CmdType]CmdHandler{
 		CmdTypeExpire: e.dataStore.Expire,
@@ -51,9 +55,9 @@ func NewDBExecutor(dataStore DataStore) *DBExecutor {
 		CmdTypeHDel: e.dataStore.HDel,
 
 		// sorted set
-		CmdTypeZAdd:   e.dataStore.ZAdd,
-		CmdTypeZRange: e.dataStore.ZRange,
-		CmdTypeZRem:   e.dataStore.ZRem,
+		CmdTypeZAdd:          e.dataStore.ZAdd,
+		CmdTypeZRangeByScore: e.dataStore.ZRangeByScore,
+		CmdTypeZRem:          e.dataStore.ZRem,
 	}
 
 	go e.run()
@@ -78,6 +82,11 @@ func (e *DBExecutor) run() {
 		select {
 		case <-e.ctx.Done():
 			return
+
+		// 每隔 1 分钟批量一次过期的 key
+		case <-e.gcTicker.C:
+			e.dataStore.GC()
+
 		case cmd := <-e.ch:
 			cmdFunc, ok := e.cmdHandlers[cmd.cmd]
 			if !ok {
