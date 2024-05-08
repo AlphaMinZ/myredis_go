@@ -37,9 +37,9 @@ const (
 	CmdTypeSRem      CmdType = "srem"
 
 	// sorted set
-	CmdTypeZAdd   CmdType = "zadd"
-	CmdTypeZRange CmdType = "zrange"
-	CmdTypeZRem   CmdType = "zrem"
+	CmdTypeZAdd          CmdType = "zadd"
+	CmdTypeZRangeByScore CmdType = "zrangebyscore"
+	CmdTypeZRem          CmdType = "zrem"
 )
 
 type DataStore interface {
@@ -70,7 +70,7 @@ type DataStore interface {
 
 	// sorted set
 	ZAdd(args [][]byte) handler.Reply
-	ZRange(args [][]byte) handler.Reply
+	ZRangeByScore(args [][]byte) handler.Reply
 	ZRem(args [][]byte) handler.Reply
 }
 
