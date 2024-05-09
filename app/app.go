@@ -1,4 +1,4 @@
-package myredisgo
+package app
 
 import "github.com/AlphaMinZ/myredis_go/server"
 

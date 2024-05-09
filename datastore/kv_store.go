@@ -3,7 +3,6 @@ package datastore
 import (
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/AlphaMinZ/myredis_go/database"
@@ -12,20 +11,21 @@ import (
 )
 
 type KVStore struct {
-	mu        sync.Mutex
 	data      map[string]interface{}
 	expiredAt map[string]time.Time
 
-	expireTimeWheel *skiplist
+	expireTimeWheel SortedSet
 }
 
 func NewKVStore() database.DataStore {
 	return &KVStore{
-		data:      make(map[string]interface{}),
-		expiredAt: make(map[string]time.Time),
+		data:            make(map[string]interface{}),
+		expiredAt:       make(map[string]time.Time),
+		expireTimeWheel: newSkiplist(),
 	}
 }
 
+// expire
 func (k *KVStore) Expire(args [][]byte) handler.Reply {
 	key := string(args[0])
 	ttl, err := strconv.ParseInt(string(args[1]), 10, 64)
@@ -39,21 +39,29 @@ func (k *KVStore) Expire(args [][]byte) handler.Reply {
 	return handler.NewOKReply()
 }
 
+// string
 func (k *KVStore) Get(args [][]byte) handler.Reply {
 	key := string(args[0])
 	v, err := k.getAsString(key)
 	if err != nil {
 		return handler.NewErrReply(err.Error())
 	}
+	if v == nil {
+		return handler.NewNillReply()
+	}
 	return handler.NewBulkReply(v.Bytes())
 }
 
 func (k *KVStore) MGet(args [][]byte) handler.Reply {
-	res := make([][]byte, len(args))
+	res := make([][]byte, 0, len(args))
 	for _, arg := range args {
 		v, err := k.getAsString(string(arg))
 		if err != nil {
 			return handler.NewErrReply(err.Error())
+		}
+		if v == nil {
+			res = append(res, []byte("(nil)"))
+			continue
 		}
 		res = append(res, v.Bytes())
 	}
@@ -65,6 +73,7 @@ func (k *KVStore) Set(args [][]byte) handler.Reply {
 	key := string(args[0])
 	value := string(args[1])
 
+	// 支持 NX EX
 	var (
 		insertStrategy bool
 		ttlStrategy    bool
@@ -96,11 +105,13 @@ func (k *KVStore) Set(args [][]byte) handler.Reply {
 		}
 	}
 
+	// 设置
 	affected := k.put(key, value, insertStrategy)
 	if affected > 0 && ttlStrategy {
 		k.expire(key, lib.TimeNow().Add(time.Duration(ttlSeconds)*time.Second))
 	}
 
+	// 过期时间处理
 	if affected > 0 {
 		return handler.NewIntReply(affected)
 	}
@@ -120,6 +131,7 @@ func (k *KVStore) MSet(args [][]byte) handler.Reply {
 	return handler.NewIntReply(int64(len(args)) >> 1)
 }
 
+// list
 func (k *KVStore) LPush(args [][]byte) handler.Reply {
 	key := string(args[0])
 	list, err := k.getAsList(key)
@@ -243,7 +255,7 @@ func (k *KVStore) LRange(args [][]byte) handler.Reply {
 	}
 
 	key := string(args[0])
-	start, err := strconv.ParseInt(string(args[1]), 10, 64)
+	start, err := strconv.ParseInt(string(args[2]), 10, 64)
 	if err != nil {
 		return handler.NewSyntaxErrReply()
 	}
@@ -276,6 +288,7 @@ func (k *KVStore) SAdd(args [][]byte) handler.Reply {
 	if err != nil {
 		return handler.NewErrReply(err.Error())
 	}
+
 	if set == nil {
 		set = newSetEntity()
 		k.putAsSet(key, set)
@@ -429,11 +442,11 @@ func (k *KVStore) ZRangeByScore(args [][]byte) handler.Reply {
 	}
 
 	key := string(args[0])
-	score1, err := strconv.ParseInt(string(args[1]), 10, 65)
+	score1, err := strconv.ParseInt(string(args[1]), 10, 64)
 	if err != nil {
 		return handler.NewSyntaxErrReply()
 	}
-	score2, err := strconv.ParseInt(string(args[2]), 10, 65)
+	score2, err := strconv.ParseInt(string(args[2]), 10, 64)
 	if err != nil {
 		return handler.NewSyntaxErrReply()
 	}

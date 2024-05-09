@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/AlphaMinZ/myredis_go/handler"
@@ -19,7 +20,7 @@ type DBExecutor struct {
 	gcTicker *time.Ticker
 }
 
-func NewDBExecutor(dataStore DataStore) *DBExecutor {
+func NewDBExecutor(dataStore DataStore) Executor {
 	ctx, cancel := context.WithCancel(context.Background())
 	e := DBExecutor{
 		dataStore: dataStore,
@@ -88,11 +89,15 @@ func (e *DBExecutor) run() {
 			e.dataStore.GC()
 
 		case cmd := <-e.ch:
-			cmdFunc, ok := e.cmdHandlers[cmd.cmd]
+			cmdKey := CmdType(strings.ToLower(cmd.cmd.String()))
+			cmdFunc, ok := e.cmdHandlers[cmdKey]
 			if !ok {
 				cmd.receiver <- handler.NewErrReply(fmt.Sprintf("unknown command '%s'", cmd.cmd))
 				continue
 			}
+
+			// 懒加载机制实现过期 key 删除
+			e.dataStore.ExpirePreprocess(string(cmd.args[0]))
 			cmd.receiver <- cmdFunc(cmd.args)
 		}
 	}

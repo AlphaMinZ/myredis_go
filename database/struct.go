@@ -10,6 +10,10 @@ type Executor interface {
 
 type CmdType string
 
+func (c CmdType) String() string {
+	return string(c)
+}
+
 const (
 	CmdTypeExpire CmdType = "expire"
 

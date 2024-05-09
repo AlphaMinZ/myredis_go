@@ -1,4 +1,4 @@
-package myredisgo
+package app
 
 import (
 	"github.com/AlphaMinZ/myredis_go/database"
@@ -33,7 +33,7 @@ func init() {
 	_ = container.Provide(server.NewServer)
 }
 
-func constructServer() (*server.Server, error) {
+func ConstructServer() (*server.Server, error) {
 	var s *server.Server
 	if err := container.Invoke(func(_s *server.Server) {
 		s = _s
