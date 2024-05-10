@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AlphaMinZ/myredis_go/app"
+	"github.com/AlphaMinZ/myredis_go/lib"
+	"github.com/AlphaMinZ/myredis_go/lib/pool"
 	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
-	"github.com/xiaoxuxiansheng/goredis/app"
-	"github.com/xiaoxuxiansheng/goredis/lib"
-	"github.com/xiaoxuxiansheng/goredis/lib/pool"
 )
 
 // goredis 质检员
