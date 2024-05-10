@@ -7,13 +7,22 @@ import (
 	"sync"
 
 	"github.com/AlphaMinZ/myredis_go/handler"
+	"github.com/AlphaMinZ/myredis_go/lib/pool"
 )
+
+type Thinker interface {
+	AppendOnly() bool
+	AppendFileName() string
+	AppendFsync() string
+}
 
 type aofPersister struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	entrance    chan [][]byte
+	entrance chan [][]byte
+
+	thinker     Thinker
 	aofFile     *os.File
 	aofFileName string
 
@@ -22,8 +31,8 @@ type aofPersister struct {
 	once sync.Once
 }
 
-func NewAofPersister() (handler.Persister, error) {
-	aofFileName := "./redis.aof"
+func NewAofPersister(thinker Thinker) (handler.Persister, error) {
+	aofFileName := thinker.AppendFileName()
 	aofFile, err := os.OpenFile(aofFileName, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
@@ -35,8 +44,9 @@ func NewAofPersister() (handler.Persister, error) {
 		entrance:    make(chan [][]byte),
 		aofFile:     aofFile,
 		aofFileName: aofFileName,
+		thinker:     thinker,
 	}
-	go a.run()
+	pool.Submit(a.run)
 	return &a, nil
 }
 

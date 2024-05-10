@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/AlphaMinZ/myredis_go/handler"
+	"github.com/AlphaMinZ/myredis_go/lib/pool"
 )
 
 type DBExecutor struct {
@@ -62,7 +63,7 @@ func NewDBExecutor(dataStore DataStore) Executor {
 		CmdTypeZRem:          e.dataStore.ZRem,
 	}
 
-	go e.run()
+	pool.Submit(e.run)
 	return &e
 }
 

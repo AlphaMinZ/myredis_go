@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/AlphaMinZ/myredis_go/lib/pool"
 	"github.com/AlphaMinZ/myredis_go/log"
 )
 
@@ -41,7 +42,7 @@ func (s *Server) ListenAndServer(address string) error {
 		sigc := make(chan os.Signal, 1)
 		signal.Notify(sigc, exitWords...)
 		closec := make(chan struct{}, 4)
-		go func() {
+		pool.Submit(func() {
 			for {
 				signal := <-sigc
 				switch signal {
@@ -51,7 +52,7 @@ func (s *Server) ListenAndServer(address string) error {
 				default:
 				}
 			}
-		}()
+		})
 
 		listener, err := net.Listen("tcp", address)
 		if err != nil {
@@ -71,21 +72,22 @@ func (s *Server) listenAndServer(listener net.Listener, closec chan struct{}) {
 
 	// 遇到意外错误，终止整个流程
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-closec:
-			cancel()
-			s.logger.Errorf("[server]server closing...")
-		case err := <-errc:
-			cancel()
-			s.logger.Errorf("[server]server err: %s", err.Error())
-		}
-		s.logger.Warnf("[server]server closeing...")
-		s.handler.Close()
-		if err := listener.Close(); err != nil {
-			s.logger.Errorf("[server]server close listener err: %s", err.Error())
-		}
-	}()
+	pool.Submit(
+		func() {
+			select {
+			case <-closec:
+				cancel()
+				s.logger.Errorf("[server]server closing...")
+			case err := <-errc:
+				cancel()
+				s.logger.Errorf("[server]server err: %s", err.Error())
+			}
+			s.logger.Warnf("[server]server closeing...")
+			s.handler.Close()
+			if err := listener.Close(); err != nil {
+				s.logger.Errorf("[server]server close listener err: %s", err.Error())
+			}
+		})
 
 	s.logger.Warnf("[server]server starting...")
 	var wg sync.WaitGroup
@@ -106,10 +108,10 @@ func (s *Server) listenAndServer(listener net.Listener, closec chan struct{}) {
 
 		// 为每个到来的 conn 分配一个 goroutine 处理
 		wg.Add(1)
-		go func() {
+		pool.Submit(func() {
 			defer wg.Done()
 			s.handler.Handle(ctx, conn)
-		}()
+		})
 	}
 
 	// 通过 waitGroup 保证优雅退出
