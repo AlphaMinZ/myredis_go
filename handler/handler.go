@@ -24,7 +24,7 @@ type Handler struct {
 }
 
 func NewHandler(db DB, persister Persister, parser Parser, logger log.Logger) (server.Handler, error) {
-	h := &Handler{
+	h := Handler{
 		conns:     make(map[net.Conn]struct{}),
 		persister: persister,
 		logger:    logger,
@@ -32,14 +32,18 @@ func NewHandler(db DB, persister Persister, parser Parser, logger log.Logger) (s
 		parser:    parser,
 	}
 
+	return &h, nil
+}
+
+func (h *Handler) Start() error {
 	// 加载持久化文件，还原内容
-	reloader, err := persister.Reloader()
+	reloader, err := h.persister.Reloader()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer reloader.Close()
-	h.handle(context.Background(), newFakeReaderWriter(reloader))
-	return h, nil
+	h.handle(SetLoadingPattern(context.Background()), newFakeReaderWriter(reloader))
+	return nil
 }
 
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
@@ -120,5 +124,6 @@ func (h *Handler) Close() {
 		}
 		h.conns = nil
 		h.db.Close()
+		h.persister.Close()
 	})
 }

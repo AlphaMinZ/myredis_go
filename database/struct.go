@@ -1,6 +1,12 @@
 package database
 
-import "github.com/AlphaMinZ/myredis_go/handler"
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/AlphaMinZ/myredis_go/handler"
+)
 
 type Executor interface {
 	Entrance() chan<- *Command
@@ -11,7 +17,7 @@ type Executor interface {
 type CmdType string
 
 func (c CmdType) String() string {
-	return string(c)
+	return strings.ToLower(string(c))
 }
 
 const (
@@ -47,52 +53,78 @@ const (
 	CmdTypeZRem          CmdType = "zrem"
 )
 
+type CmdAdapter interface {
+	ToCmd() [][]byte
+}
+
 type DataStore interface {
+	ForEach(task func(key string, adapter CmdAdapter, expireAt *time.Time))
+
 	ExpirePreprocess(key string)
 	GC()
 
-	Expire(args [][]byte) handler.Reply
-	ExpireAt(args [][]byte) handler.Reply
+	Expire(*Command) handler.Reply
+	ExpireAt(*Command) handler.Reply
 
 	// string
-	Get(args [][]byte) handler.Reply
-	MGet(args [][]byte) handler.Reply
-	Set(args [][]byte) handler.Reply
-	MSet(args [][]byte) handler.Reply
+	Get(*Command) handler.Reply
+	MGet(*Command) handler.Reply
+	Set(*Command) handler.Reply
+	MSet(*Command) handler.Reply
 
 	// list
-	LPush(args [][]byte) handler.Reply
-	LPop(args [][]byte) handler.Reply
-	RPush(args [][]byte) handler.Reply
-	RPop(args [][]byte) handler.Reply
-	LRange(args [][]byte) handler.Reply
+	LPush(*Command) handler.Reply
+	LPop(*Command) handler.Reply
+	RPush(*Command) handler.Reply
+	RPop(*Command) handler.Reply
+	LRange(*Command) handler.Reply
 
 	// set
-	SAdd(args [][]byte) handler.Reply
-	SIsMember(args [][]byte) handler.Reply
-	SRem(args [][]byte) handler.Reply
+	SAdd(*Command) handler.Reply
+	SIsMember(*Command) handler.Reply
+	SRem(*Command) handler.Reply
 
 	// hash
-	HSet(args [][]byte) handler.Reply
-	HGet(args [][]byte) handler.Reply
-	HDel(args [][]byte) handler.Reply
+	HSet(*Command) handler.Reply
+	HGet(*Command) handler.Reply
+	HDel(*Command) handler.Reply
 
 	// sorted set
-	ZAdd(args [][]byte) handler.Reply
-	ZRangeByScore(args [][]byte) handler.Reply
-	ZRem(args [][]byte) handler.Reply
+	ZAdd(*Command) handler.Reply
+	ZRangeByScore(*Command) handler.Reply
+	ZRem(*Command) handler.Reply
 }
 
-type CmdHandler func(args [][]byte) handler.Reply
+type CmdHandler func(*Command) handler.Reply
 
 type Command struct {
+	ctx      context.Context
 	cmd      CmdType
 	args     [][]byte
 	receiver CmdReceiver
 }
 
+func NewCommand(cmd CmdType, args [][]byte) *Command {
+	return &Command{
+		cmd:  cmd,
+		args: args,
+	}
+}
+
+func (c *Command) Ctx() context.Context {
+	return c.ctx
+}
+
 func (c *Command) Receiver() CmdReceiver {
 	return c.receiver
+}
+
+func (c *Command) Args() [][]byte {
+	return c.args
+}
+
+func (c *Command) Cmd() [][]byte {
+	return append([][]byte{[]byte(c.cmd.String())}, c.args...)
 }
 
 type CmdReceiver chan handler.Reply

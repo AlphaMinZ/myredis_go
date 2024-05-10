@@ -1,6 +1,6 @@
 package app
 
-import "github.com/AlphaMinZ/myredis_go/server"
+import "github.com/xiaoxuxiansheng/goredis/server"
 
 type Application struct {
 	server *server.Server
@@ -15,5 +15,9 @@ func NewApplication(server *server.Server, conf *Config) *Application {
 }
 
 func (a *Application) Run() error {
-	return a.server.ListenAndServer(a.conf.Address())
+	return a.server.Serve(a.conf.Address())
+}
+
+func (a *Application) Stop() {
+	a.server.Stop()
 }

@@ -14,11 +14,12 @@ import (
 )
 
 type Config struct {
-	Bind            string `cfg:"bind"`           // ip 地址
-	Port            int    `cfg:"port"`           // 启动端口号
-	AppendOnly_     bool   `cfg:"appendonly"`     // 是否启用 aof
-	AppendFileName_ string `cfg:"appendfilename"` // aof 文件名称
-	AppendFsync_    string `cfg:"appendfsync"`    // aof 级别
+	Bind                    string `cfg:"bind"`                        // ip 地址
+	Port                    int    `cfg:"port"`                        // 启动端口号
+	AppendOnly_             bool   `cfg:"appendonly"`                  // 是否启用 aof
+	AppendFileName_         string `cfg:"appendfilename"`              // aof 文件名称
+	AppendFsync_            string `cfg:"appendfsync"`                 // aof 级别
+	AutoAofRewriteAfterCmd_ int    `cfg:"auto-aof-rewrite-after-cmds"` // 每执行多少次 aof 操作后，进行一次重写
 }
 
 func (c *Config) Address() string {
@@ -37,24 +38,28 @@ func (c *Config) AppendFsync() string {
 	return c.AppendFsync_
 }
 
+func (c *Config) AutoAofRewriteAfterCmd() int {
+	return c.AutoAofRewriteAfterCmd_
+}
+
 var (
 	confOnce   sync.Once
 	globalConf *Config
 )
 
-func PersisterThinker() persist.Thinker {
+func PersistThinker() persist.Thinker {
 	return SetUpConfig()
 }
 
-func SetUpConfig() (conf *Config) {
+func SetUpConfig() *Config {
 	confOnce.Do(func() {
 		defer func() {
 			if globalConf == nil {
-				conf = defaultConf()
+				globalConf = defaultConf()
 			}
 		}()
 
-		file, err := os.Open("../myredis.conf")
+		file, err := os.Open("./redis.conf")
 		if err != nil {
 			return
 		}

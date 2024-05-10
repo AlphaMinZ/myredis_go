@@ -7,6 +7,7 @@ import (
 )
 
 func (k *KVStore) GC() {
+	// 找出当前所有已过期的 key，批量回收
 	nowUnix := lib.TimeNow().Unix()
 	for _, expiredKey := range k.expireTimeWheel.Range(0, nowUnix) {
 		k.expireProcess(expiredKey)
@@ -14,12 +15,12 @@ func (k *KVStore) GC() {
 }
 
 func (k *KVStore) ExpirePreprocess(key string) {
-	expireAt, ok := k.expiredAt[key]
+	expiredAt, ok := k.expiredAt[key]
 	if !ok {
 		return
 	}
 
-	if expireAt.After(lib.TimeNow()) {
+	if expiredAt.After(lib.TimeNow()) {
 		return
 	}
 

@@ -1,6 +1,7 @@
 package datastore
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"time"
@@ -23,13 +24,14 @@ func NewKVStore(persister handler.Persister) database.DataStore {
 	return &KVStore{
 		data:            make(map[string]interface{}),
 		expiredAt:       make(map[string]time.Time),
-		expireTimeWheel: newSkiplist(),
+		expireTimeWheel: newSkiplist("expireTimeWheel"),
 		persister:       persister,
 	}
 }
 
 // expire
-func (k *KVStore) Expire(args [][]byte) handler.Reply {
+func (k *KVStore) Expire(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	ttl, err := strconv.ParseInt(string(args[1]), 10, 64)
 	if err != nil {
@@ -40,11 +42,12 @@ func (k *KVStore) Expire(args [][]byte) handler.Reply {
 	}
 
 	expireAt := lib.TimeNow().Add(time.Duration(ttl) * time.Second)
-	_args := [][]byte{[]byte(database.CmdTypeExpireAt), []byte(key), []byte(lib.TimeSecondFormat(expireAt))}
-	return k.expireAt(_args, key, expireAt)
+	_cmd := [][]byte{[]byte(database.CmdTypeExpireAt), []byte(key), []byte(lib.TimeSecondFormat(expireAt))}
+	return k.expireAt(cmd.Ctx(), _cmd, key, expireAt)
 }
 
-func (k *KVStore) ExpireAt(args [][]byte) handler.Reply {
+func (k *KVStore) ExpireAt(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	expiredAt, err := lib.ParseTimeSecondFormat(string((args[1])))
 	if err != nil {
@@ -54,17 +57,18 @@ func (k *KVStore) ExpireAt(args [][]byte) handler.Reply {
 		return handler.NewErrReply("ERR invalid expire time")
 	}
 
-	return k.expireAt(args, key, expiredAt)
+	return k.expireAt(cmd.Ctx(), cmd.Cmd(), key, expiredAt)
 }
 
-func (k *KVStore) expireAt(args [][]byte, key string, expireAt time.Time) handler.Reply {
+func (k *KVStore) expireAt(ctx context.Context, cmd [][]byte, key string, expireAt time.Time) handler.Reply {
 	k.expire(key, expireAt)
-	k.persister.PersistCmd(args) // 持久化
+	k.persister.PersistCmd(ctx, cmd) // 持久化
 	return handler.NewOKReply()
 }
 
 // string
-func (k *KVStore) Get(args [][]byte) handler.Reply {
+func (k *KVStore) Get(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	v, err := k.getAsString(key)
 	if err != nil {
@@ -76,7 +80,8 @@ func (k *KVStore) Get(args [][]byte) handler.Reply {
 	return handler.NewBulkReply(v.Bytes())
 }
 
-func (k *KVStore) MGet(args [][]byte) handler.Reply {
+func (k *KVStore) MGet(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	res := make([][]byte, 0, len(args))
 	for _, arg := range args {
 		v, err := k.getAsString(string(arg))
@@ -93,7 +98,8 @@ func (k *KVStore) MGet(args [][]byte) handler.Reply {
 	return handler.NewMultiBulkReply(res)
 }
 
-func (k *KVStore) Set(args [][]byte) handler.Reply {
+func (k *KVStore) Set(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	value := string(args[1])
 
@@ -102,6 +108,7 @@ func (k *KVStore) Set(args [][]byte) handler.Reply {
 		insertStrategy bool
 		ttlStrategy    bool
 		ttlSeconds     int64
+		ttlIndex       = -1
 	)
 
 	for i := 2; i < len(args); i++ {
@@ -127,32 +134,37 @@ func (k *KVStore) Set(args [][]byte) handler.Reply {
 
 			ttlStrategy = true
 			ttlSeconds = ttl
-			// 将 args 剔除 ex 部分，进行持久化
-			args = append(args[:i], args[i+2:]...)
+			ttlIndex = i
 			i++
 		default:
 			return handler.NewSyntaxErrReply()
 		}
 	}
 
+	// 将 args 剔除 ex 部分，进行持久化
+	if ttlIndex != -1 {
+		args = append(args[:ttlIndex], args[ttlIndex+2:]...)
+	}
+
 	// 设置
 	affected := k.put(key, value, insertStrategy)
-	if ttlStrategy {
+	if affected > 0 && ttlStrategy {
 		expireAt := lib.TimeNow().Add(time.Duration(ttlSeconds) * time.Second)
-		_args := [][]byte{[]byte(database.CmdTypeExpireAt), []byte(key), []byte(lib.TimeSecondFormat(expireAt))}
-		_ = k.expireAt(_args, key, expireAt) // 其中会完成 ex 信息的持久化
+		_cmd := [][]byte{[]byte(database.CmdTypeExpireAt), []byte(key), []byte(lib.TimeSecondFormat(expireAt))}
+		_ = k.expireAt(cmd.Ctx(), _cmd, key, expireAt) // 其中会完成 ex 信息的持久化
 	}
 
 	// 过期时间处理
 	if affected > 0 {
-		k.persister.PersistCmd(args)
+		k.persister.PersistCmd(cmd.Ctx(), append([][]byte{[]byte(database.CmdTypeSet)}, args...))
 		return handler.NewIntReply(affected)
 	}
 
 	return handler.NewNillReply()
 }
 
-func (k *KVStore) MSet(args [][]byte) handler.Reply {
+func (k *KVStore) MSet(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	if len(args)&1 == 1 {
 		return handler.NewSyntaxErrReply()
 	}
@@ -161,12 +173,13 @@ func (k *KVStore) MSet(args [][]byte) handler.Reply {
 		_ = k.put(string(args[i]), string(args[i+1]), false)
 	}
 
-	k.persister.PersistCmd(args)
+	k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd())
 	return handler.NewIntReply(int64(len(args) >> 1))
 }
 
 // list
-func (k *KVStore) LPush(args [][]byte) handler.Reply {
+func (k *KVStore) LPush(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	list, err := k.getAsList(key)
 	if err != nil {
@@ -174,7 +187,7 @@ func (k *KVStore) LPush(args [][]byte) handler.Reply {
 	}
 
 	if list == nil {
-		list = newListEntity()
+		list = newListEntity(key)
 		k.putAsList(key, list)
 	}
 
@@ -182,11 +195,12 @@ func (k *KVStore) LPush(args [][]byte) handler.Reply {
 		list.LPush(args[i])
 	}
 
-	k.persister.PersistCmd(args)
+	k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd())
 	return handler.NewIntReply(list.Len())
 }
 
-func (k *KVStore) LPop(args [][]byte) handler.Reply {
+func (k *KVStore) LPop(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	var cnt int64
 	if len(args) > 1 {
@@ -218,7 +232,7 @@ func (k *KVStore) LPop(args [][]byte) handler.Reply {
 		return handler.NewNillReply()
 	}
 
-	k.persister.PersistCmd(args) // 持久化
+	k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd()) // 持久化
 
 	if len(poped) == 1 {
 		return handler.NewBulkReply(poped[0])
@@ -227,7 +241,8 @@ func (k *KVStore) LPop(args [][]byte) handler.Reply {
 	return handler.NewMultiBulkReply(poped)
 }
 
-func (k *KVStore) RPush(args [][]byte) handler.Reply {
+func (k *KVStore) RPush(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	list, err := k.getAsList(key)
 	if err != nil {
@@ -235,7 +250,7 @@ func (k *KVStore) RPush(args [][]byte) handler.Reply {
 	}
 
 	if list == nil {
-		list = newListEntity(args[1:]...)
+		list = newListEntity(key, args[1:]...)
 		k.putAsList(key, list)
 		return handler.NewIntReply(list.Len())
 	}
@@ -244,11 +259,12 @@ func (k *KVStore) RPush(args [][]byte) handler.Reply {
 		list.RPush(args[i])
 	}
 
-	k.persister.PersistCmd(args) // 持久化
+	k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd()) // 持久化
 	return handler.NewIntReply(list.Len())
 }
 
-func (k *KVStore) RPop(args [][]byte) handler.Reply {
+func (k *KVStore) RPop(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	var cnt int64
 	if len(args) > 1 {
@@ -280,7 +296,7 @@ func (k *KVStore) RPop(args [][]byte) handler.Reply {
 		return handler.NewNillReply()
 	}
 
-	k.persister.PersistCmd(args) // 持久化
+	k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd()) // 持久化
 	if len(poped) == 1 {
 		return handler.NewBulkReply(poped[0])
 	}
@@ -288,7 +304,8 @@ func (k *KVStore) RPop(args [][]byte) handler.Reply {
 	return handler.NewMultiBulkReply(poped)
 }
 
-func (k *KVStore) LRange(args [][]byte) handler.Reply {
+func (k *KVStore) LRange(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	if len(args) != 3 {
 		return handler.NewSyntaxErrReply()
 	}
@@ -321,7 +338,8 @@ func (k *KVStore) LRange(args [][]byte) handler.Reply {
 }
 
 // set
-func (k *KVStore) SAdd(args [][]byte) handler.Reply {
+func (k *KVStore) SAdd(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	set, err := k.getAsSet(key)
 	if err != nil {
@@ -329,7 +347,7 @@ func (k *KVStore) SAdd(args [][]byte) handler.Reply {
 	}
 
 	if set == nil {
-		set = newSetEntity()
+		set = newSetEntity(key)
 		k.putAsSet(key, set)
 	}
 
@@ -338,11 +356,16 @@ func (k *KVStore) SAdd(args [][]byte) handler.Reply {
 		added += set.Add(string(arg))
 	}
 
-	k.persister.PersistCmd(args) // 持久化
+	k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd()) // 持久化
 	return handler.NewIntReply(added)
 }
 
-func (k *KVStore) SIsMember(args [][]byte) handler.Reply {
+func (k *KVStore) SIsMember(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
+	if len(args) != 2 {
+		return handler.NewSyntaxErrReply()
+	}
+
 	key := string(args[0])
 	set, err := k.getAsSet(key)
 	if err != nil {
@@ -356,7 +379,8 @@ func (k *KVStore) SIsMember(args [][]byte) handler.Reply {
 	return handler.NewIntReply(set.Exist(string(args[1])))
 }
 
-func (k *KVStore) SRem(args [][]byte) handler.Reply {
+func (k *KVStore) SRem(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	set, err := k.getAsSet(key)
 	if err != nil {
@@ -373,13 +397,14 @@ func (k *KVStore) SRem(args [][]byte) handler.Reply {
 	}
 
 	if remed > 0 {
-		k.persister.PersistCmd(args) // 持久化
+		k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd()) // 持久化
 	}
 	return handler.NewIntReply(remed)
 }
 
 // hash
-func (k *KVStore) HSet(args [][]byte) handler.Reply {
+func (k *KVStore) HSet(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	if len(args)&1 != 1 {
 		return handler.NewSyntaxErrReply()
 	}
@@ -391,7 +416,7 @@ func (k *KVStore) HSet(args [][]byte) handler.Reply {
 	}
 
 	if hmap == nil {
-		hmap = newHashMapEntity()
+		hmap = newHashMapEntity(key)
 		k.putAsHashMap(key, hmap)
 	}
 
@@ -401,11 +426,12 @@ func (k *KVStore) HSet(args [][]byte) handler.Reply {
 		hmap.Put(hkey, hvalue)
 	}
 
-	k.persister.PersistCmd(args) // 持久化
+	k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd()) // 持久化
 	return handler.NewIntReply(int64((len(args) - 1) >> 1))
 }
 
-func (k *KVStore) HGet(args [][]byte) handler.Reply {
+func (k *KVStore) HGet(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	hmap, err := k.getAsHashMap(key)
 	if err != nil {
@@ -423,7 +449,8 @@ func (k *KVStore) HGet(args [][]byte) handler.Reply {
 	return handler.NewNillReply()
 }
 
-func (k *KVStore) HDel(args [][]byte) handler.Reply {
+func (k *KVStore) HDel(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	hmap, err := k.getAsHashMap(key)
 	if err != nil {
@@ -440,13 +467,14 @@ func (k *KVStore) HDel(args [][]byte) handler.Reply {
 	}
 
 	if remed > 0 {
-		k.persister.PersistCmd(args) // 持久化
+		k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd()) // 持久化
 	}
 	return handler.NewIntReply(remed)
 }
 
 // sorted set
-func (k *KVStore) ZAdd(args [][]byte) handler.Reply {
+func (k *KVStore) ZAdd(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	if len(args)&1 != 1 {
 		return handler.NewSyntaxErrReply()
 	}
@@ -473,7 +501,7 @@ func (k *KVStore) ZAdd(args [][]byte) handler.Reply {
 	}
 
 	if zset == nil {
-		zset = newSkiplist()
+		zset = newSkiplist(key)
 		k.putAsSortedSet(key, zset)
 	}
 
@@ -481,11 +509,12 @@ func (k *KVStore) ZAdd(args [][]byte) handler.Reply {
 		zset.Add(scores[i], members[i])
 	}
 
-	k.persister.PersistCmd(args) // 持久化
+	k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd()) // 持久化
 	return handler.NewIntReply(int64(len(scores)))
 }
 
-func (k *KVStore) ZRangeByScore(args [][]byte) handler.Reply {
+func (k *KVStore) ZRangeByScore(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	if len(args) < 3 {
 		return handler.NewSyntaxErrReply()
 	}
@@ -522,7 +551,8 @@ func (k *KVStore) ZRangeByScore(args [][]byte) handler.Reply {
 	return handler.NewMultiBulkReply(res)
 }
 
-func (k *KVStore) ZRem(args [][]byte) handler.Reply {
+func (k *KVStore) ZRem(cmd *database.Command) handler.Reply {
+	args := cmd.Args()
 	key := string(args[0])
 	zset, err := k.getAsSortedSet(key)
 	if err != nil {
@@ -539,7 +569,7 @@ func (k *KVStore) ZRem(args [][]byte) handler.Reply {
 	}
 
 	if remed > 0 {
-		k.persister.PersistCmd(args) // 持久化
+		k.persister.PersistCmd(cmd.Ctx(), cmd.Cmd()) // 持久化
 	}
 	return handler.NewIntReply(remed)
 }

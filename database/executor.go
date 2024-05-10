@@ -3,11 +3,10 @@ package database
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/AlphaMinZ/myredis_go/handler"
-	"github.com/AlphaMinZ/myredis_go/lib/pool"
+	"github.com/xiaoxuxiansheng/goredis/handler"
+	"github.com/xiaoxuxiansheng/goredis/lib/pool"
 )
 
 type DBExecutor struct {
@@ -72,7 +71,7 @@ func (e *DBExecutor) Entrance() chan<- *Command {
 }
 
 func (e *DBExecutor) ValidCommand(cmd CmdType) bool {
-	_, valid := e.cmdHandlers[cmd]
+	_, valid := e.cmdHandlers[cmd] // map 只读，不考虑并发问题
 	return valid
 }
 
@@ -91,16 +90,14 @@ func (e *DBExecutor) run() {
 			e.dataStore.GC()
 
 		case cmd := <-e.ch:
-			cmdKey := CmdType(strings.ToLower(cmd.cmd.String()))
-			cmdFunc, ok := e.cmdHandlers[cmdKey]
+			cmdFunc, ok := e.cmdHandlers[cmd.cmd]
 			if !ok {
 				cmd.receiver <- handler.NewErrReply(fmt.Sprintf("unknown command '%s'", cmd.cmd))
 				continue
 			}
 
-			// 懒加载机制实现过期 key 删除
-			e.dataStore.ExpirePreprocess(string(cmd.args[0]))
-			cmd.receiver <- cmdFunc(cmd.args)
+			e.dataStore.ExpirePreprocess(string(cmd.args[0])) // 懒加载机制实现过期 key 删除
+			cmd.receiver <- cmdFunc(cmd)
 		}
 	}
 }

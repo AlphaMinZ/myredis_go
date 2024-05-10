@@ -19,7 +19,7 @@ type Parser struct {
 }
 
 func NewParser(logger log.Logger) handler.Parser {
-	p := &Parser{
+	p := Parser{
 		logger: logger,
 	}
 	p.lineParsers = map[byte]lineParser{
@@ -29,7 +29,7 @@ func NewParser(logger log.Logger) handler.Parser {
 		'$': p.parseBulk,
 		'*': p.parseMultiBulk,
 	}
-	return p
+	return &p
 }
 
 func (p *Parser) ParseStream(reader io.Reader) <-chan *handler.Droplet {
@@ -129,7 +129,7 @@ func (p *Parser) parseBulkBody(header []byte, reader *bufio.Reader) ([]byte, err
 	if _, err = io.ReadFull(reader, body); err != nil {
 		return nil, err
 	}
-	return body, nil
+	return body[:len(body)-2], nil
 }
 
 // 解析
